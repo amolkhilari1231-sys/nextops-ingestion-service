@@ -1,173 +1,135 @@
-# NextOps Ingestion Service - Azure VM Deployment Guide
+# NextOps Industrial - Telemetry Ingestion Service
+## Simple Setup on Azure VM (Without Docker)
 
-A simple, step-by-step guide to deploy the **NextOps Telemetry Ingestion Service** on an Azure Virtual Machine (Ubuntu) with a public IP.
-
----
-
-## 1. Prerequisites
-
-- **Azure VM** running Ubuntu (22.04 / 24.04 LTS) with a **Public IP**.
-- **SSH access** to the VM.
-- **Port 8000 open** in the Azure Network Security Group (NSG).
+A simple, direct guide to run this FastAPI ingestion service on an Azure VM.
 
 ---
 
-## 2. Open Inbound Port in Azure (NSG)
+## 1. Open Port in Azure NSG
 
-To access the service via your Public IP:
-1. Go to the [Azure Portal](https://portal.azure.com).
-2. Navigate to your **Virtual Machine** > **Networking** (or **Network settings**).
-3. Under **Inbound port rules**, click **Add inbound port rule**:
-   - **Destination port ranges**: `8000`
+In the Azure Portal:
+1. Go to your Virtual Machine > **Networking** > **Network settings** (or your **Network Security Group**).
+2. Under **Inbound port rules**, click **Add inbound rule**:
+   - **Destination port ranges**: `8000` (or `8001` if running on the same VM as the query service)
    - **Protocol**: `TCP`
    - **Action**: `Allow`
+   - **Priority**: `1010`
    - **Name**: `Allow-Port-8000`
-4. Click **Add**.
+3. Ensure **Port 22 (SSH)** is also allowed.
 
 ---
 
-## 3. Connect to Your VM
+## 2. Connect to the Azure VM
 
-From your local terminal:
 ```bash
-ssh <azure-username>@<YOUR_VM_PUBLIC_IP>
+ssh azureuser@<YOUR_AZURE_PUBLIC_IP>
 ```
 
 ---
 
-## 4. Install Docker
-
-Docker is the simplest way to run both PostgreSQL and the ingestion service without dependency conflicts:
+## 3. Install Python, Pip & Git
 
 ```bash
-# Update packages and install Docker
 sudo apt update
-sudo apt install -y docker.io docker-compose
-
-# Allow your user to run Docker without sudo
-sudo usermod -aG docker $USER
-newgrp docker
+sudo apt install -y python3 python3-pip git
 ```
 
 ---
 
-## 5. Run PostgreSQL
-
-Start a PostgreSQL container with a persistent volume:
+## 4. Clone the Repository
 
 ```bash
-docker run -d \
-  --name nextops-postgres \
-  --restart unless-stopped \
-  -e POSTGRES_USER=axion_user \
-  -e POSTGRES_PASSWORD=securepassword123 \
-  -e POSTGRES_DB=axion_db \
-  -p 5432:5432 \
-  -v pgdata:/var/lib/postgresql/data \
-  postgres:16
-```
-
-Initialize the database schema:
-```bash
-docker exec -i nextops-postgres psql -U axion_user -d axion_db << 'EOF'
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
-
-CREATE TABLE IF NOT EXISTS telemetry (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    device_id VARCHAR(50) NOT NULL,
-    device_type VARCHAR(50) NOT NULL,
-    refinery_region VARCHAR(50) NOT NULL,
-    timestamp TIMESTAMP NOT NULL,
-    temperature DOUBLE PRECISION NOT NULL,
-    pressure DOUBLE PRECISION NOT NULL,
-    flow_rate DOUBLE PRECISION NOT NULL,
-    component_metrics JSONB DEFAULT '{}'::jsonb,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_telemetry_device_id_timestamp ON telemetry(device_id, timestamp DESC);
-CREATE INDEX IF NOT EXISTS idx_telemetry_timestamp ON telemetry(timestamp DESC);
-CREATE INDEX IF NOT EXISTS idx_telemetry_region ON telemetry(refinery_region);
-EOF
-```
-
----
-
-## 6. Deploy NextOps Ingestion Service
-
-### Clone & Configure
-
-```bash
-# Clone the repository (or copy the project directory)
 git clone <YOUR_REPO_URL>
 cd nextops-ingestion-service
-
-# Create your .env file
-cat << 'EOF' > .env
-DATABASE_URL=postgresql://axion_user:securepassword123@172.17.0.1:5432/axion_db
-EOF
-```
-> **Note**: `172.17.0.1` is the default Docker host bridge gateway IP, allowing the container to talk to PostgreSQL running on the VM host.
-
-### Build and Run with Docker
-
-```bash
-# Build the Docker image
-docker build -t nextops-ingestion-service .
-
-# Run the container
-docker run -d \
-  --name nextops-ingestion \
-  --restart unless-stopped \
-  --env-file .env \
-  -p 8000:8000 \
-  nextops-ingestion-service
 ```
 
 ---
 
-## 7. Verify the Deployment
+## 5. Update Connection String in `config.py`
 
-Open your browser or run from your local machine:
+Edit `config.py` with your database connection details:
 
-1. **Health Check**:
-   ```bash
-   curl http://<YOUR_VM_PUBLIC_IP>:8000/health
-   # Output: {"status":"UP"}
-   ```
+```bash
+nano config.py
+```
 
-2. **Swagger UI (Interactive API Docs)**:
-   ```
-   http://<YOUR_VM_PUBLIC_IP>:8000/docs
-   ```
+Update line 17 with your existing PostgreSQL connection string:
 
-3. **Send a Test Telemetry Record**:
-   ```bash
-   curl -X POST http://<YOUR_VM_PUBLIC_IP>:8000/api/v1/telemetry \
-     -H "Content-Type: application/json" \
-     -d '{
-       "device_id": "BOILER-01",
-       "device_type": "BOILER",
-       "refinery_region": "STATION_1",
-       "timestamp": "2026-11-14T12:00:00Z",
-       "temperature": 540.5,
-       "pressure": 165.2,
-       "flow_rate": 2100.0,
-       "component_metrics": {"steam_flow": 2100.0}
-     }'
-   ```
+```python
+    DATABASE_URL: str = os.getenv(
+        "DATABASE_URL",
+        "postgresql://<username>:<password>@<db-host>:<port>/<database-name>",
+    )
+```
+
+*(Note: If your password contains special characters like `@`, URL-encode them, e.g. `@` becomes `%40`)*
+
+Save and exit (`Ctrl+O`, `Enter`, `Ctrl+X`).
 
 ---
 
-## Useful Maintenance Commands
+## 6. Install Dependencies
+
+Install the requirements directly using pip:
 
 ```bash
-# View service logs
-docker logs -f nextops-ingestion
+pip install -r requirements.txt
+```
 
-# Restart the service
-docker restart nextops-ingestion
+*(Note: On newer Ubuntu versions like 24.04, if prompted with an externally-managed-environment notice, add `--break-system-packages`: `pip install -r requirements.txt --break-system-packages`)*
 
-# Stop the service
-docker stop nextops-ingestion
+---
+
+## 7. Run the Application with Uvicorn
+
+### Option A: Run in Foreground (Testing)
+
+```bash
+uvicorn main:app --host 0.0.0.0 --port 8000
+```
+
+*(If running alongside the query service on the same VM, change to `--port 8001`)*
+
+### Option B: Run in Background (Keeps running after disconnecting SSH)
+
+```bash
+nohup uvicorn main:app --host 0.0.0.0 --port 8000 > app.log 2>&1 &
+```
+
+- **Check logs:**
+  ```bash
+  tail -f app.log
+  ```
+- **Stop the app:**
+  ```bash
+  pkill -f uvicorn
+  ```
+
+---
+
+## 8. Test in Browser / Terminal
+
+Open your browser or terminal and test:
+
+- **Swagger API Docs:** `http://<YOUR_AZURE_PUBLIC_IP>:8000/docs`
+- **Healthcheck:** `http://<YOUR_AZURE_PUBLIC_IP>:8000/health`
+- **Get Telemetry:** `http://<YOUR_AZURE_PUBLIC_IP>:8000/api/v1/telemetry`
+
+### Sample Ingest Test (cURL):
+
+```bash
+curl -X POST "http://<YOUR_AZURE_PUBLIC_IP>:8000/api/v1/telemetry/ingest" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "deviceId": "BOILER-01",
+    "deviceType": "BOILER",
+    "refineryRegion": "EAST-WING",
+    "timestamp": "2026-11-14T10:00:00Z",
+    "metrics": {
+      "temperature": 542.5,
+      "pressure": 175.4,
+      "flow_rate": 210.0
+    },
+    "componentMetrics": {}
+  }'
 ```
