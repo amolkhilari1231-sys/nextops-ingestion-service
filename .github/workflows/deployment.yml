@@ -48,6 +48,7 @@ jobs:
 
   deploy-backend:
     name: "⚙️ Deploy Ingestion Service (${{ github.event.inputs.environment || 'Preprod' }})"
+    if: github.event_name == 'workflow_dispatch'
     needs: [test-and-lint]
     environment: ${{ github.event.inputs.environment || 'Preprod' }}
     runs-on: ubuntu-latest
